@@ -1,4 +1,4 @@
-include README.md CHANGES LICENSE
+include README.md CHANGES LICENSE _build_version.py
 recursive-include doc *.html *.sh
 recursive-include docs *.html
 recursive-include tests *.robot
