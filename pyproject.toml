@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "robotframework-grid-downloader-plugin"
+name = "robotframework-selenium-grid-downloader"
 version = "1.1.0"
 description = "Selenium Grid managed downloads plugin for Robot Framework SeleniumLibrary"
 readme = "README.md"

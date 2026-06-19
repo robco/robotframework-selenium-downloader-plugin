@@ -15,7 +15,7 @@
 # limitations under the License.
 
 *** Settings ***
-Documentation     Selenium Library Grid Downloader Plugin e2e tests
+Documentation     SeleniumLibrary Grid Downloader Plugin e2e tests
 Library   OperatingSystem
 Library   SeleniumLibrary  plugins=GridDownloader
 

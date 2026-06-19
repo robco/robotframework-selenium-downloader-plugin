@@ -29,7 +29,7 @@ Selenium Grid managed downloads currently support Chrome, Edge, and Firefox. Fil
 ## Install
 
 ```bash
-pip install -U robotframework-grid-downloader-plugin
+pip install -U robotframework-selenium-grid-downloader
 ```
 
 ## Keywords Documentation

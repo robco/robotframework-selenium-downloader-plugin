@@ -22,4 +22,4 @@ repo_dir="$(cd "${script_dir}/.." && pwd)"
 output_path="${1:-${repo_dir}/docs/index.html}"
 
 mkdir -p "$(dirname "${output_path}")"
-python -m robot.libdoc "SeleniumLibrary::plugins=GridDownloader" "${output_path}"
+python -m robot.libdoc --name "SeleniumLibrary Grid Downloader Plugin" "SeleniumLibrary::plugins=GridDownloader" "${output_path}"
