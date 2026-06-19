@@ -1,2 +1,5 @@
-include *.md *.robot CHANGES LICENSE
-exclude *.pyc
+include README.md CHANGES LICENSE
+recursive-include doc *.html *.sh
+recursive-include docs *.html
+recursive-include tests *.robot
+recursive-include unittests *.py

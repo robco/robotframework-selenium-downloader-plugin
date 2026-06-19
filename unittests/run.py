@@ -1,12 +1,25 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-# Copyright Robert Malovec (github@malovec.sk)
-# Licensed under Apache-2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+# Apache License 2.0
+#
+# Copyright (c) 2026 Róbert Malovec
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import argparse
 import os
 import shutil
 import sys
+from contextlib import suppress
 from os.path import abspath, dirname
 
 from pytest import main as py_main
@@ -21,10 +34,8 @@ def recreate_output_dir(output_dir):
     Recreates output directory.
     :param output_dir: The output directory path.
     """
-    try:
+    with suppress(FileNotFoundError):
         shutil.rmtree(output_dir)
-    except FileNotFoundError:
-        pass
     os.makedirs(output_dir, exist_ok=True)
 
 
@@ -63,4 +74,3 @@ def run_unit_tests():
 
 if __name__ == "__main__":
     sys.exit(run_unit_tests())
-

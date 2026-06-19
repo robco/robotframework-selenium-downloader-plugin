@@ -1,4 +1,76 @@
 [build-system]
-requires = ["setuptools>=68.1.1", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "robotframework-grid-downloader-plugin"
+version = "1.1.0"
+description = "Selenium Grid managed downloads plugin for Robot Framework SeleniumLibrary"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+  { name = "Robert Malovec", email = "github@malovec.sk" },
+]
+keywords = [
+  "robotframework",
+  "seleniumlibrary",
+  "selenium-grid",
+  "downloads",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Framework :: Robot Framework",
+  "Framework :: Robot Framework :: Library",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "robotframework>=7.4.2",
+  "robotframework-seleniumlibrary>=6.9.0",
+  "selenium>=4.29.0,<4.45.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2.2",
+  "flake8>=7.0",
+  "pytest>=8.0",
+  "ruff>=0.9",
+  "twine>=5.0",
+]
+test = [
+  "build>=1.2.2",
+  "flake8>=7.0",
+  "pytest>=8.0",
+  "ruff>=0.9",
+  "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/robco/robotframework-selenium-downloader-plugin"
+Source = "https://github.com/robco/robotframework-selenium-downloader-plugin"
+Issues = "https://github.com/robco/robotframework-selenium-downloader-plugin/issues"
+Documentation = "https://robco.github.io/robotframework-selenium-downloader-plugin/"
+
+[tool.setuptools.packages.find]
+include = ["GridDownloader*"]
+exclude = ["tests*", "unittests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["unittests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

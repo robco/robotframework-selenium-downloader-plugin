@@ -1,24 +1,38 @@
-# Copyright Robert Malovec (github@malovec.sk)
-# Licensed under Apache-2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+# Apache License 2.0
+#
+# Copyright (c) 2026 Róbert Malovec
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 This module provides functionalities for downloading files from remote Selenium Grid web testing node.
 """
 
-# The rest of your imports and code here
-
-
-import os
-import io
-import zipfile
 import base64
-from time import sleep
-from urllib.parse import urlparse
-import requests
-from SeleniumLibrary.base import LibraryComponent, keyword
-from SeleniumLibrary.keywords.browsermanagement import BrowserManagementKeywords
+import binascii
+import io
+import os
+import zipfile
+from time import monotonic, sleep
+from typing import Any
+
 from robot.api import logger
 from robot.libraries.BuiltIn import BuiltIn, RobotNotRunningError
+from robot.utils import is_truthy, timestr_to_secs
+from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.remote.command import Command
+from SeleniumLibrary.base import LibraryComponent, keyword
+from SeleniumLibrary.keywords.browsermanagement import BrowserManagementKeywords
 
 
 class GridDownloader(LibraryComponent):
@@ -28,6 +42,11 @@ class GridDownloader(LibraryComponent):
 
     It provides functionality to enable file downloads on the remote grid, download files, list files, and wait for
     files to be available for download.
+
+    Selenium Grid nodes must be started with managed downloads enabled:
+    | java -jar selenium-server-<version>.jar node --enable-managed-downloads true |
+
+    Files must be downloaded while the browser session is still active.
 
     == Usage ==
 
@@ -71,7 +90,9 @@ class GridDownloader(LibraryComponent):
     |    Wait Until File Is Available To Download  ${FILENAME}
     |    Get List Of Downloaded Files
     |    ${content}=  Download File From Grid  ${FILENAME}
-    |    Should Be Equal As Strings  ${content}  Hello world
+    |    ${content_text}=  Evaluate  $content.decode("utf-8")
+    |    Should Be Equal As Strings  ${content_text}  Hello world
+    |    Delete Downloaded Files From Grid
 
     == Example - automatic capability activation DISABLED ==
 
@@ -86,7 +107,7 @@ class GridDownloader(LibraryComponent):
     |
     | ${BROWSER}        chrome
     | ${URL}            https://www.example.com
-    | ${options}        platform_name="windows";set_capability("se:downloadsEnabled", True)
+    | ${options}        platform_name="windows";enable_downloads=True
     | ${GRID_URL}       http://grid.com:4444/wd/hub
     | ${DOWNLOAD_LINK}  xpath=//a[@id='download']
     | ${FILENAME}       file1.txt
@@ -99,13 +120,14 @@ class GridDownloader(LibraryComponent):
     |    Wait Until File Is Available To Download  ${FILENAME}
     |    Get List Of Downloaded Files
     |    ${content}=  Download File From Grid  ${FILENAME}
-    |    Should Be Equal As Strings  ${content}  Hello world
+    |    ${content_text}=  Evaluate  $content.decode("utf-8")
+    |    Should Be Equal As Strings  ${content_text}  Hello world
+    |    Delete Downloaded Files From Grid
     """
 
-    DOWNLOADS_CAPABILITY = 'set_capability("se:downloadsEnabled", True)'
+    DOWNLOADS_CAPABILITY = "enable_downloads=True"
     WAIT_TIMEOUT = 30
     WAIT_STEP = 2
-    REQ_TIMEOUT = 600
 
     def __init__(self, ctx, activate_capability: str = "Yes"):
         """
@@ -118,19 +140,26 @@ class GridDownloader(LibraryComponent):
         `activate_capability`: If set to "Yes", the library will automatically activate the download capability
                                     on the browser.
         """
-        # pylint:disable=E1101
-        requests.packages.urllib3.disable_warnings()
-
         LibraryComponent.__init__(self, ctx)
         self.browser = BrowserManagementKeywords(ctx)
         self.output_dir = self._get_rf_output_dir()
 
-        self.force_download_capability = False
-        if activate_capability.lower() == "yes":
-            self.force_download_capability = True
+        self.force_download_capability = is_truthy(activate_capability)
 
     @keyword
-    def open_browser(self, *args, **kwargs):
+    def open_browser(
+        self,
+        url: str | None = None,
+        browser: str = "firefox",
+        alias: str | None = None,
+        remote_url: bool | str = False,
+        desired_capabilities: dict | str | None = None,
+        ff_profile_dir: Any = None,
+        options: Any = None,
+        service_log_path: str | None = None,
+        executable_path: str | None = None,
+        service: Any = None,
+    ) -> str:
         """
         Opens a browser using SeleniumLibrary original keyword with the given arguments and enables file downloading
         capability on the Selenium Grid.
@@ -146,21 +175,24 @@ class GridDownloader(LibraryComponent):
         | Open Browser | https://www.example.com | chrome | options=platform_name="WINDOWS" |
         """
         if self.force_download_capability:
+            options = self._enable_downloads_in_options(options)
 
-            options_found = False
-            if "options" in kwargs:
-                options_found = True
-                if "se:downloadsEnabled" not in kwargs["options"]:
-                    kwargs["options"] += f";{self.DOWNLOADS_CAPABILITY}"
-
-            if not options_found:
-                kwargs["options"] = self.DOWNLOADS_CAPABILITY
-
-        self.browser.open_browser(*args, **kwargs)
+        return self.browser.open_browser(
+            url=url,
+            browser=browser,
+            alias=alias,
+            remote_url=remote_url,
+            desired_capabilities=desired_capabilities,
+            ff_profile_dir=ff_profile_dir,
+            options=options,
+            service_log_path=service_log_path,
+            executable_path=executable_path,
+            service=service,
+        )
 
     # pylint:disable=too-many-locals
     @keyword
-    def download_file_from_grid(self, filename, save_path=None, verify=False):
+    def download_file_from_grid(self, filename, save_path=None, verify=None):
         """
         Downloads a file from the remote Selenium Grid node to the local machine.
 
@@ -171,7 +203,7 @@ class GridDownloader(LibraryComponent):
         `save_path`: Local path where the file should be saved.
                           If not provided, Robot Framework's output directory is used.
 
-        `verify`: If False, SSL certificate verification will be disabled for the Selenium Grid endpoint.
+        `verify`: Deprecated and ignored. TLS verification is handled by Selenium's command executor.
 
         === Usage examples ===
 
@@ -179,88 +211,63 @@ class GridDownloader(LibraryComponent):
         | Download File From Grid | example.txt | /local/path |
         | ${file_content}=  Download File From Grid | example.txt |
         """
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json; charset=utf-8",
-        }
-
-        data = {"name": f"{filename}"}
-
         if not save_path:
-            save_path = self.output_dir
+            save_path = self._get_rf_output_dir()
 
-        url = self._get_downloader_endpoint()
+        response = self._download_file(filename)
+        contents = self._get_download_contents(response, filename)
+        saved_file, file_content = self._extract_downloaded_file(contents, filename, save_path)
 
-        try:
-            response = requests.post(url, headers=headers, json=data, timeout=self.REQ_TIMEOUT, verify=verify)
-            # pylint: disable=E1101
-            if response.status_code == requests.codes.OK:
-                response_json = response.json()
-                contents = response_json["value"]["contents"]
-
-                # Extract file content
-                zip_content = base64.b64decode(contents)
-                with io.BytesIO(zip_content) as zip_buffer:
-                    with zipfile.ZipFile(zip_buffer, "r") as zip_ref:
-                        unzipped_filename = zip_ref.namelist()[0]
-                        with zip_ref.open(unzipped_filename) as unzipped_file:
-                            file_content = unzipped_file.read()
-
-                with open(os.path.join(save_path, unzipped_filename), "wb") as output_file:
-                    output_file.write(file_content)
-
-                logger.info(f"File {unzipped_filename} downloaded successfully.")
-            else:
-                logger.debug(f"Failed to download {filename}: {response.status_code}: {response.content}")
-                if "cannot find file" in response.content.decode("utf-8").lower():
-                    raise AssertionError(f"Failed to download {filename}: File not found.")
-
-                raise AssertionError(f"Failed to download {filename}.")
-
-            return file_content
-
-        except Exception as e:
-            logger.debug(f"Failed to download {filename}. Set 'se:downloadsEnabled' capability: {e}")
-
-            if "File not found" in str(e):
-                # pylint: disable=W0707
-                raise AssertionError(f"Failed to download {filename}: File not found.")
-
-            # pylint: disable=W0707
-            raise AssertionError(f"Failed to download {filename}. Is 'se:downloadsEnabled' capability set?")
+        logger.info(f"File {saved_file} downloaded successfully.")
+        return file_content
 
     @keyword
-    def get_list_of_downloaded_files(self, verify=False):
+    def get_list_of_downloaded_files(self, verify=None):
         """
         Returns a list of downloaded files from the remote Selenium Grid node.
 
         === Arguments details ===
 
-        `verify`: If False, SSL certificate verification will be disabled for the Selenium Grid endpoint.
+        `verify`: Deprecated and ignored. TLS verification is handled by Selenium's command executor.
 
         === Usage examples ===
 
         | @{files} = | Get List Of Downloaded Files |
         """
 
-        url = self._get_downloader_endpoint()
-
         try:
-            response = requests.get(url, timeout=self.REQ_TIMEOUT, verify=verify)
-            logger.debug(f"{response}")
-            response.raise_for_status()
-
-            data = response.json()
-            files = data["value"]["names"]
-
+            self._ensure_download_api_available("get_downloadable_files")
+            files = self.driver.get_downloadable_files()
             logger.debug(f"List of downloaded files: {files}")
-
             return files
-
-        except Exception as e:
+        except WebDriverException as e:
             logger.debug(f"Failed to get list of downloaded files. Set 'se:downloadsEnabled' capability: {e}")
-            # pylint: disable=W0707
-            raise AssertionError("Failed to get list of downloaded files. Set 'se:downloadsEnabled' capability.")
+            raise AssertionError(
+                "Failed to get list of downloaded files. Make sure the Selenium Grid node was started with "
+                "--enable-managed-downloads true and the browser session has 'se:downloadsEnabled' set to true. "
+                f"Original error: {e}"
+            ) from e
+
+    @keyword
+    def delete_downloaded_files_from_grid(self):
+        """
+        Deletes all downloadable files for the active Selenium Grid session.
+
+        === Usage examples ===
+
+        | Delete Downloaded Files From Grid |
+        """
+        try:
+            self._ensure_download_api_available("delete_downloadable_files")
+            self.driver.delete_downloadable_files()
+            logger.info("Downloaded files deleted from Selenium Grid session.")
+        except WebDriverException as e:
+            logger.debug(f"Failed to delete downloaded files. Set 'se:downloadsEnabled' capability: {e}")
+            raise AssertionError(
+                "Failed to delete downloaded files. Make sure the Selenium Grid node was started with "
+                "--enable-managed-downloads true and the browser session has 'se:downloadsEnabled' set to true. "
+                f"Original error: {e}"
+            ) from e
 
     @keyword
     def wait_until_file_is_available_to_download(self, filename, timeout=None, wait_step=None):
@@ -281,42 +288,145 @@ class GridDownloader(LibraryComponent):
         | Wait Until File Is Available To Download | example.txt | timeout=60 | wait_step=5 |
         """
 
-        timeout = timeout or self.WAIT_TIMEOUT
-        timeout = int(timeout)
-        wait_step = wait_step or self.WAIT_STEP
-        wait_step = int(wait_step)
+        timeout = self._to_seconds(timeout, self.WAIT_TIMEOUT, "timeout")
+        wait_step = self._to_seconds(wait_step, self.WAIT_STEP, "wait_step")
 
-        # pylint: disable=W0612
-        for i in range(timeout):
+        deadline = monotonic() + timeout
+        downloaded_files = []
+
+        while True:
             downloaded_files = self.get_list_of_downloaded_files()
             if filename in downloaded_files:
                 logger.info(f"File {filename} available to download.")
                 return
-            sleep(wait_step)
 
-        raise AssertionError(f"File {filename} was not available to download in {timeout * wait_step} seconds.")
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(wait_step, remaining))
 
-    def _get_downloader_endpoint(self):
-        """
-        Returns the endpoint URL for the Selenium Grid file downloader for actual test session
-        """
-        grid_url = self._get_remote_url()
-        session_id = self.browser.get_session_id()
-        url = f"{grid_url}/session/{session_id}/se/files"
+        raise AssertionError(
+            f"File {filename} was not available to download in {timeout:g} seconds. "
+            f"Downloaded files: {downloaded_files}"
+        )
 
-        return url
+    def _enable_downloads_in_options(self, options):
+        if options is None:
+            return self.DOWNLOADS_CAPABILITY
 
-    def _get_remote_url(self):
-        """
-        Returns the remote URL of the Selenium Grid
-        """
+        if isinstance(options, str):
+            if self._downloads_enabled_in_string_options(options):
+                return options
+            separator = "" if not options.strip() or options.rstrip().endswith(";") else ";"
+            return f"{options}{separator}{self.DOWNLOADS_CAPABILITY}"
 
-        url = urlparse(getattr(self.browser.driver.command_executor, "_url", None))
-        remote_url = f"{url.scheme}://{url.hostname}:{url.port}"
+        if isinstance(options, list):
+            return [self._enable_downloads_in_options(option) for option in options]
 
-        logger.debug(f"Remote URL: {remote_url}")
+        if self._downloads_enabled_in_options_object(options):
+            return options
 
-        return remote_url
+        if hasattr(options, "enable_downloads"):
+            options.enable_downloads = True
+            return options
+
+        if hasattr(options, "set_capability"):
+            options.set_capability("se:downloadsEnabled", True)
+            return options
+
+        raise TypeError(
+            "Cannot activate Selenium Grid downloads for the supplied options object. "
+            "Pass Selenium options as a string or as an object supporting 'enable_downloads' or 'set_capability'."
+        )
+
+    @staticmethod
+    def _downloads_enabled_in_string_options(options):
+        return "se:downloadsEnabled" in options or "enable_downloads" in options
+
+    @staticmethod
+    def _downloads_enabled_in_options_object(options):
+        capabilities = getattr(options, "capabilities", None)
+        return isinstance(capabilities, dict) and bool(capabilities.get("se:downloadsEnabled"))
+
+    def _download_file(self, filename):
+        try:
+            self._ensure_download_api_available("execute")
+            return self.driver.execute(Command.DOWNLOAD_FILE, {"name": filename})
+        except WebDriverException as e:
+            if self._is_file_not_found_error(e):
+                raise AssertionError(f"Failed to download {filename}: File not found.") from e
+            logger.debug(f"Failed to download {filename}. Set 'se:downloadsEnabled' capability: {e}")
+            raise AssertionError(
+                f"Failed to download {filename}. Make sure the Selenium Grid node was started with "
+                "--enable-managed-downloads true and the browser session has 'se:downloadsEnabled' set to true. "
+                f"Original error: {e}"
+            ) from e
+
+    @staticmethod
+    def _get_download_contents(response, filename):
+        try:
+            return response["value"]["contents"]
+        except (KeyError, TypeError) as e:
+            raise AssertionError(
+                f"Failed to download {filename}: Selenium Grid returned an unexpected response."
+            ) from e
+
+    def _extract_downloaded_file(self, contents, filename, save_path):
+        target_dir = os.path.abspath(os.fspath(save_path))
+        os.makedirs(target_dir, exist_ok=True)
+
+        try:
+            zip_content = base64.b64decode(contents, validate=True)
+            with io.BytesIO(zip_content) as zip_buffer, zipfile.ZipFile(zip_buffer, "r") as zip_ref:
+                member = self._select_zip_member(zip_ref, filename)
+                output_path = self._safe_zip_member_path(target_dir, member.filename)
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                with zip_ref.open(member) as unzipped_file:
+                    file_content = unzipped_file.read()
+                with open(output_path, "wb") as output_file:
+                    output_file.write(file_content)
+                return output_path, file_content
+        except (binascii.Error, TypeError, zipfile.BadZipFile) as e:
+            raise AssertionError(f"Failed to download {filename}: Selenium Grid returned invalid file contents.") from e
+
+    @staticmethod
+    def _select_zip_member(zip_ref, filename):
+        file_members = [member for member in zip_ref.infolist() if not member.is_dir()]
+        if not file_members:
+            raise AssertionError(f"Failed to download {filename}: Selenium Grid returned an empty archive.")
+
+        for member in file_members:
+            if member.filename == filename or member.filename.replace("\\", "/").split("/")[-1] == filename:
+                return member
+
+        return file_members[0]
+
+    @staticmethod
+    def _safe_zip_member_path(target_dir, member_name):
+        output_path = os.path.abspath(os.path.join(target_dir, member_name))
+        if os.path.commonpath([target_dir, output_path]) != target_dir:
+            raise AssertionError(f"Refusing to extract unsafe downloaded file path: {member_name}")
+        return output_path
+
+    def _ensure_download_api_available(self, method_name):
+        if not hasattr(self.driver, method_name):
+            raise AssertionError(
+                "Selenium Grid download support requires Selenium 4 downloadable-file APIs. "
+                "Use a current robotframework-seleniumlibrary release with Selenium 4."
+            )
+
+    @staticmethod
+    def _is_file_not_found_error(error):
+        return "cannot find file" in str(error).lower() or "file not found" in str(error).lower()
+
+    @staticmethod
+    def _to_seconds(value, default, name):
+        seconds = timestr_to_secs(default if value is None else value)
+        if seconds < 0:
+            raise ValueError(f"{name} must be zero or greater.")
+        if name == "wait_step" and seconds == 0:
+            raise ValueError("wait_step must be greater than zero.")
+        return seconds
 
     @staticmethod
     def _get_rf_output_dir():

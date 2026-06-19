@@ -1,218 +1,268 @@
-# Copyright Robert Malovec (github@malovec.sk)
-# Licensed under Apache-2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+# Apache License 2.0
+#
+# Copyright (c) 2026 Róbert Malovec
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import base64
+import io
+import json
+import os
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-import os
-import requests
-from unittest.mock import MagicMock, patch
-from GridDownloader import GridDownloader
-from SeleniumLibrary.keywords.browsermanagement import BrowserManagementKeywords
 from robot.libraries.BuiltIn import RobotNotRunningError
+from selenium.common.exceptions import WebDriverException
+from selenium.webdriver import ChromeOptions
+from selenium.webdriver.remote.command import Command
+from SeleniumLibrary.keywords.browsermanagement import BrowserManagementKeywords
 
-"""
-GridDownloaderTest
-    Covers GridDownloader methods
-"""
+from GridDownloader import GridDownloader
 
 
 @pytest.fixture
 def mock_context():
-    # Mocking the context object passed to the class
-    return MagicMock()
+    context = MagicMock()
+    context.driver = MagicMock()
+    return context
 
 
 @pytest.fixture
 def grid_downloader(mock_context):
-    # Instantiate GridDownloader with activate_capability="Yes"
-
-    grid_downloader = GridDownloader(mock_context, activate_capability="Yes")
-
-    mock_command_executor = MagicMock()
-    mock_command_executor._url = "http://selenium.grid.com:4444/wd/hub"
-    grid_downloader.browser.driver.command_executor = mock_command_executor
-
-    return grid_downloader
+    return GridDownloader(mock_context, activate_capability="Yes")
 
 
 @pytest.fixture
-def grid_downloader_activate_capability_disabled(mock_context):
-    # Instantiate GridDownloader with activate_capability="No"
+def grid_downloader_capability_disabled(mock_context):
     return GridDownloader(mock_context, activate_capability="No")
 
 
-def test_initialization_with_capability_yes(grid_downloader, mock_context):
-    # Test that the initialization works when activate_capability is "Yes"
+def _download_response(file_name="file.txt", content=b"Hello world\n", zip_member_name=None):
+    zip_member_name = zip_member_name or file_name
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr(zip_member_name, content)
+    return {"value": {"filename": file_name, "contents": base64.b64encode(zip_buffer.getvalue()).decode("ascii")}}
 
-    assert grid_downloader.force_download_capability is True
-    assert grid_downloader.browser is not None
-    assert grid_downloader.output_dir is not None
-    assert isinstance(grid_downloader.output_dir, str)
 
-
-def test_initialization_with_capability_no(grid_downloader_activate_capability_disabled, mock_context):
-    # Test that the initialization works when activate_capability is "No"
-
-    assert grid_downloader_activate_capability_disabled.force_download_capability is False
-    assert grid_downloader_activate_capability_disabled.browser is not None
-    assert grid_downloader_activate_capability_disabled.output_dir is not None
-    assert isinstance(grid_downloader_activate_capability_disabled.output_dir, str)
+def test_initialization_uses_robot_truthy_values(mock_context):
+    assert GridDownloader(mock_context, activate_capability="Yes").force_download_capability is True
+    assert GridDownloader(mock_context, activate_capability="true").force_download_capability is True
+    assert GridDownloader(mock_context, activate_capability="No").force_download_capability is False
+    assert GridDownloader(mock_context, activate_capability="0").force_download_capability is False
 
 
 def test_browser_initialization(grid_downloader):
-    # Test that the browser is initialized correctly
-
     assert grid_downloader.browser is not None
     assert isinstance(grid_downloader.browser, BrowserManagementKeywords)
+    assert grid_downloader.output_dir
 
 
 def test_get_rf_output_dir_robot_running(grid_downloader):
-    # Test output directory retrieval when Robot Framework is running
-
     with patch("robot.libraries.BuiltIn.BuiltIn.get_variable_value", return_value="/robot/output"):
-        output_dir = grid_downloader._get_rf_output_dir()
-        assert output_dir == "/robot/output"
+        assert grid_downloader._get_rf_output_dir() == "/robot/output"
 
 
 def test_get_rf_output_dir_robot_not_running(grid_downloader):
-    # Test output directory retrieval when Robot Framework is not running
-
-    with patch("robot.libraries.BuiltIn.BuiltIn.get_variable_value", side_effect=RobotNotRunningError):
-        with patch("os.getcwd", return_value="/current/dir"):
-            output_dir = grid_downloader._get_rf_output_dir()
-            pytest.raises(RobotNotRunningError)
-            assert output_dir == os.getcwd()
+    with (
+        patch("robot.libraries.BuiltIn.BuiltIn.get_variable_value", side_effect=RobotNotRunningError),
+        patch("os.getcwd", return_value="/current/dir"),
+    ):
+        assert grid_downloader._get_rf_output_dir() == os.getcwd()
 
 
-@patch('requests.get')
-def test_get_list_of_downloaded_files_success(mock_requests_get, grid_downloader):
-    # Test successful retrieval of the available file list
+@patch("SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser")
+def test_open_browser_adds_download_capability_when_options_are_missing(mock_open_browser, grid_downloader):
+    mock_open_browser.return_value = "1"
 
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "value": {
-            "names": ["file1.txt", "file2.txt"]
-        }
-    }
-    mock_requests_get.return_value = mock_response
+    index = grid_downloader.open_browser("https://selenium.dev", browser="chrome")
 
-    # Call the method
-    files = grid_downloader.get_list_of_downloaded_files()
-
-    # Assert the expected results
-    assert files == ["file1.txt", "file2.txt"]
-    mock_requests_get.assert_called_once_with(grid_downloader._get_downloader_endpoint(), timeout=600, verify=False)
+    assert index == "1"
+    assert mock_open_browser.call_args.kwargs["options"] == "enable_downloads=True"
 
 
-@patch('requests.get')
-def test_get_list_of_downloaded_files_failure(mock_requests_get, grid_downloader):
-    # Test failure to retrieve the available file list
+@patch("SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser")
+def test_open_browser_appends_download_capability_to_string_options(mock_open_browser, grid_downloader):
+    mock_open_browser.return_value = "1"
 
-    mock_requests_get.side_effect = Exception("Network error")
+    grid_downloader.open_browser("https://selenium.dev", browser="chrome", options='platform_name="WINDOWS"')
 
-    # Expect AssertionError to be raised
-    with pytest.raises(AssertionError,
-                       match="Failed to get list of downloaded files. Set 'se:downloadsEnabled' capability."):
+    assert mock_open_browser.call_args.kwargs["options"] == 'platform_name="WINDOWS";enable_downloads=True'
+
+
+@patch("SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser")
+def test_open_browser_does_not_duplicate_existing_download_capability(mock_open_browser, grid_downloader):
+    options = 'platform_name="WINDOWS";set_capability("se:downloadsEnabled", True)'
+
+    grid_downloader.open_browser("https://selenium.dev", browser="chrome", options=options)
+
+    assert mock_open_browser.call_args.kwargs["options"] == options
+
+
+@patch("SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser")
+def test_open_browser_sets_download_capability_on_selenium_options_object(mock_open_browser, grid_downloader):
+    options = ChromeOptions()
+
+    grid_downloader.open_browser("https://selenium.dev", browser="chrome", options=options)
+
+    assert mock_open_browser.call_args.kwargs["options"] is options
+    assert options.capabilities["se:downloadsEnabled"] is True
+
+
+@patch("SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser")
+def test_open_browser_leaves_options_unchanged_when_capability_activation_is_disabled(
+    mock_open_browser, grid_downloader_capability_disabled
+):
+    grid_downloader_capability_disabled.open_browser(
+        "https://selenium.dev", browser="chrome", options='platform_name="WINDOWS"'
+    )
+
+    assert mock_open_browser.call_args.kwargs["options"] == 'platform_name="WINDOWS"'
+
+
+def test_get_list_of_downloaded_files_success(grid_downloader, mock_context):
+    mock_context.driver.get_downloadable_files.return_value = ["file1.txt", "file2.txt"]
+
+    assert grid_downloader.get_list_of_downloaded_files() == ["file1.txt", "file2.txt"]
+    mock_context.driver.get_downloadable_files.assert_called_once_with()
+
+
+def test_get_list_of_downloaded_files_failure(grid_downloader, mock_context):
+    mock_context.driver.get_downloadable_files.side_effect = WebDriverException("downloads not enabled")
+
+    with pytest.raises(AssertionError, match="Failed to get list of downloaded files"):
         grid_downloader.get_list_of_downloaded_files()
 
-    mock_requests_get.assert_called_once_with(grid_downloader._get_downloader_endpoint(), timeout=600, verify=False)
+
+def test_delete_downloaded_files_from_grid(grid_downloader, mock_context):
+    grid_downloader.delete_downloaded_files_from_grid()
+
+    mock_context.driver.delete_downloadable_files.assert_called_once_with()
 
 
-@patch('requests.post')
-def test_download_file_from_grid_file_not_found(mock_requests_post, grid_downloader):
-    # Test download attempt of not available file
+def test_delete_downloaded_files_from_grid_failure(grid_downloader, mock_context):
+    mock_context.driver.delete_downloadable_files.side_effect = WebDriverException("downloads not enabled")
 
-    mock_response = MagicMock()
-    mock_response.status_code = requests.codes.internal_server_error
-    mock_response.content = b"Cannot find file"
-    mock_requests_post.return_value = mock_response
-
-    # Expect an assertion error due to file not being found
-    with pytest.raises(AssertionError, match="Failed to download non_existent_file.txt. File not found."):
-        grid_downloader.download_file_from_grid("non_existent_file.txt")
+    with pytest.raises(AssertionError, match="Failed to delete downloaded files"):
+        grid_downloader.delete_downloaded_files_from_grid()
 
 
-@patch('requests.post')
-def test_download_file_from_grid_network_failure(mock_requests_post, grid_downloader):
-    # Test download attempt of file with network failure
+def test_download_file_from_grid_uses_selenium_command_and_saves_content(grid_downloader, mock_context, tmp_path):
+    mock_context.driver.execute.return_value = _download_response()
 
-    mock_requests_post.side_effect = Exception("Network error")
+    content = grid_downloader.download_file_from_grid("file.txt", save_path=tmp_path)
 
-    # Expect an exception to be raised
-    with pytest.raises(Exception, match="Failed to download test_file.txt."):
-        grid_downloader.download_file_from_grid("test_file.txt")
-
-
-@patch('requests.post')
-def test_download_file_from_grid(mock_requests_post, grid_downloader):
-    # Test successful download of a file and file content extraction
-
-    mock_response = MagicMock()
-    mock_response.status_code = requests.codes.ok
-    mock_response.json.return_value = {
-        "value": {
-            "filename": "file.txt",
-            "contents": "UEsDBBQACAAIAHRNUFkAAAAAAAAAAAwAAAAIACAAZmlsZS50eHRVVA0AB6xuD2eubg9nrG4PZ3V4CwABBPUBAAA"
-                        + "EFAAAAPNIzcnJVyjPL8pJ4QIAUEsHCNXgObcOAAAADAAAAFBLAQIUAxQACAAIAHRNUFnV4Dm3DgAAAAwAAAAIAC"
-                        + "AAAAAAAAAAAACkgQAAAABmaWxlLnR4dFVUDQAHrG4PZ65uD2esbg9ndXgLAAEE9QEAAAQUAAAAUEsFBgAAAAABA"
-                        + "AEAVgAAAGQAAAAAAA=="
-        }
-    }
-    mock_requests_post.return_value = mock_response
-
-    # Expect an assertion error due to file not being found
-    content = grid_downloader.download_file_from_grid("file.txt")
     assert content == b"Hello world\n"
+    assert (tmp_path / "file.txt").read_bytes() == b"Hello world\n"
+    mock_context.driver.execute.assert_called_once_with(Command.DOWNLOAD_FILE, {"name": "file.txt"})
 
 
-@patch('SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser')
-def test_open_browser_download_capability_enabled_no_options(mock_open_browser, grid_downloader):
-    # Test that the download capability is automatically added to the empty browser options
+def test_download_file_from_grid_creates_save_directory(grid_downloader, mock_context, tmp_path):
+    save_path = tmp_path / "downloads"
+    mock_context.driver.execute.return_value = _download_response()
 
-    mock_open_browser.return_value = "Browser opened"
+    grid_downloader.download_file_from_grid("file.txt", save_path=save_path)
 
-    # Set up kwargs with no "options"
-    kwargs = {}
-
-    # Call the method with download capability enabled
-    grid_downloader.open_browser("https://selenium.dev", **kwargs)
-
-    # Assert that the download capability was added to the options
-    assert BrowserManagementKeywords.open_browser.called
-    assert (BrowserManagementKeywords.open_browser.call_args[1]["options"] ==
-            'set_capability("se:downloadsEnabled", True)')
+    assert (save_path / "file.txt").exists()
 
 
-@patch('SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser')
-def test_open_browser_download_capability_enabled(mock_open_browser, grid_downloader):
-    # Test that the download capability is automatically added to the browser options
+def test_download_file_from_grid_reports_missing_file(grid_downloader, mock_context, tmp_path):
+    mock_context.driver.execute.side_effect = WebDriverException("Cannot find file")
 
-    mock_open_browser.return_value = "Browser opened"
-
-    # Set up kwargs with no "options"
-    kwargs = {"options": "platform_name=WINDOWS"}
-
-    # Call the method with download capability enabled
-    grid_downloader.open_browser("https://selenium.dev", **kwargs)
-
-    # Assert that the download capability was added to the options
-    assert BrowserManagementKeywords.open_browser.called
-    assert (BrowserManagementKeywords.open_browser.call_args[1]["options"] ==
-            'platform_name=WINDOWS;set_capability("se:downloadsEnabled", True)')
+    with pytest.raises(AssertionError, match="File not found"):
+        grid_downloader.download_file_from_grid("missing.txt", save_path=tmp_path)
 
 
-@patch('SeleniumLibrary.keywords.browsermanagement.BrowserManagementKeywords.open_browser')
-def test_open_browser_download_capability_disabled(mock_open_browser, grid_downloader_activate_capability_disabled):
-    # Test that the download capability is not added to the browser options when capability activation disabled
+def test_download_file_from_grid_rejects_unsafe_zip_paths(grid_downloader, mock_context, tmp_path):
+    mock_context.driver.execute.return_value = _download_response(file_name="evil.txt", zip_member_name="../evil.txt")
 
-    mock_open_browser.return_value = "Browser opened"
+    with pytest.raises(AssertionError, match="unsafe downloaded file path"):
+        grid_downloader.download_file_from_grid("evil.txt", save_path=tmp_path / "downloads")
 
-    # Set up kwargs with no "options"
-    kwargs = {"options": "platform_name=WINDOWS"}
+    assert not (tmp_path / "evil.txt").exists()
 
-    # Call the method with download capability enabled
-    grid_downloader_activate_capability_disabled.open_browser("https://selenium.dev", **kwargs)
 
-    # Assert that the download capability was added to the options
-    assert BrowserManagementKeywords.open_browser.called
-    assert (BrowserManagementKeywords.open_browser.call_args[1]["options"] ==
-            'platform_name=WINDOWS')
+def test_download_file_from_grid_reports_unexpected_response(grid_downloader, mock_context, tmp_path):
+    mock_context.driver.execute.return_value = {"value": {}}
+
+    with pytest.raises(AssertionError, match="unexpected response"):
+        grid_downloader.download_file_from_grid("file.txt", save_path=tmp_path)
+
+
+def test_download_file_from_grid_reports_invalid_contents(grid_downloader, mock_context, tmp_path):
+    mock_context.driver.execute.return_value = {"value": {"contents": "not-valid-base64"}}
+
+    with pytest.raises(AssertionError, match="invalid file contents"):
+        grid_downloader.download_file_from_grid("file.txt", save_path=tmp_path)
+
+
+def test_wait_until_file_is_available_to_download_supports_robot_time_strings(grid_downloader):
+    with (
+        patch.object(grid_downloader, "get_list_of_downloaded_files", side_effect=[[], ["file.txt"]]),
+        patch("GridDownloader.GridDownloader.sleep") as mock_sleep,
+    ):
+        grid_downloader.wait_until_file_is_available_to_download(
+            "file.txt", timeout="5 seconds", wait_step="0.1 seconds"
+        )
+
+    mock_sleep.assert_called_once()
+
+
+def test_wait_until_file_is_available_to_download_reports_available_files(grid_downloader):
+    with (
+        patch.object(grid_downloader, "get_list_of_downloaded_files", return_value=["other.txt"]),
+        pytest.raises(AssertionError, match=r"Downloaded files: \['other.txt'\]"),
+    ):
+        grid_downloader.wait_until_file_is_available_to_download(
+            "file.txt", timeout="0.01 seconds", wait_step="0.01 seconds"
+        )
+
+
+def test_wait_until_file_is_available_to_download_rejects_zero_wait_step(grid_downloader):
+    with pytest.raises(ValueError, match="wait_step must be greater than zero"):
+        grid_downloader.wait_until_file_is_available_to_download("file.txt", wait_step=0)
+
+
+def test_libdoc_exposes_plugin_keywords_with_stable_open_browser_signature(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    libdoc_json = tmp_path / "libdoc.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "robot.libdoc",
+            "--format",
+            "JSON",
+            "SeleniumLibrary::plugins=GridDownloader",
+            str(libdoc_json),
+        ],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(libdoc_json.read_text())
+    keywords = {keyword["name"]: keyword for keyword in data["keywords"]}
+
+    assert "Download File From Grid" in keywords
+    assert "Delete Downloaded Files From Grid" in keywords
+    assert "Wait Until File Is Available To Download" in keywords
+    assert [arg["name"] for arg in keywords["Open Browser"]["args"][:4]] == ["url", "browser", "alias", "remote_url"]
+    assert all(arg["kind"] != "VAR_POSITIONAL" for arg in keywords["Open Browser"]["args"])
