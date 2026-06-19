@@ -160,7 +160,7 @@ jobs:
         run: ./doc/generate-doc.sh
 
       - name: Commit updated libdoc
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref_name != 'main'
         run: |
           if git diff --quiet -- docs/index.html; then
             echo "docs/index.html is already up to date"
@@ -172,6 +172,14 @@ jobs:
           git commit -m "Update generated libdoc [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
 
-      - name: Verify libdoc in pull requests
-        if: github.event_name == 'pull_request'
-        run: git diff --exit-code -- docs/index.html
+      - name: Verify generated libdoc
+        if: github.event_name == 'pull_request' || github.ref_name == 'main'
+        run: |
+          if git diff --quiet -- docs/index.html; then
+            echo "docs/index.html is already up to date"
+            exit 0
+          fi
+
+          echo "::error file=docs/index.html::Generated libdoc is out of date. Run ./doc/generate-doc.sh and commit docs/index.html in a pull request."
+          git diff --stat -- docs/index.html
+          exit 1

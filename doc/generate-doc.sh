@@ -23,3 +23,13 @@ output_path="${1:-${repo_dir}/docs/index.html}"
 
 mkdir -p "$(dirname "${output_path}")"
 python -m robot.libdoc --name "SeleniumLibrary Grid Downloader Plugin" "SeleniumLibrary::plugins=GridDownloader" "${output_path}"
+
+# Libdoc embeds the Python runtime, OS, and absolute source paths in the HTML.
+# It also writes a generation timestamp. Normalize those fields so docs do not
+# change when the CI image, local checkout path, or generation time changes.
+perl -0pi -e '
+  s#<meta content="Robot Framework [^"]+" name="Generator">#<meta content="Robot Framework libdoc" name="Generator">#g;
+  s#("generated": ")[^"]+(")#$1$2#g;
+  s#("source": ")[^"]*/site-packages/(SeleniumLibrary/[^"]+")#$1$2#g;
+  s#("source": ")[^"]*/(GridDownloader/GridDownloader\.py")#$1$2#g;
+' "${output_path}"
