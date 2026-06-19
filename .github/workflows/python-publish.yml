@@ -27,6 +27,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verify release tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          package_version="$(python - <<'PY'
+          import _build_version
+
+          print(_build_version.__version__)
+          PY
+          )"
+          release_tag="${{ github.event.release.tag_name }}"
+
+          if [ "${release_tag}" != "${package_version}" ] && [ "${release_tag}" != "v${package_version}" ]; then
+            echo "::error::Release tag ${release_tag} does not match package version ${package_version}."
+            exit 1
+          fi
+
       - name: Build release distributions
         run: |
           # NOTE: put your own distribution build steps here.

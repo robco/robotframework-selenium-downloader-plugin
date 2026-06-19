@@ -1,2 +1,3 @@
+1.0.1, 19-Jun-2026 -- Rebuild release distributions after PyPI filename reuse
 1.0.0, 19-Jun-2026 -- Modernize Selenium Grid managed downloads support
 0.1.0, 25-Nov-2024 -- Initial version
